@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mini Harvest - Farming Prototype</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="game-wrapper">
+    <header class="hud-top">
+      <div id="hud-day">Spring Day 1 (Mon) | 06:00</div>
+      <div id="hud-gold">Gold: 500 G</div>
+      <div id="hud-stamina">Stamina: 100/100</div>
+    </header>
+
+    <canvas id="gameCanvas" width="768" height="512"></canvas>
+
+    <footer class="hud-bottom">
+      <div class="toolbar" id="toolbar"></div>
+      <div class="controls-hint">
+        <strong>Kontrol:</strong> [WASD / Panah] Jalan &bull; [1-4] Pilih Alat &bull; [Spasi] Gunakan Alat / Interaksi &bull; [B] Beli Bibit Lobak (50G)
+      </div>
+    </footer>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
