@@ -8,6 +8,9 @@ import {
   createInitialMap,
 } from './gameData.js';
 
+const SAVE_KEY = 'mini_harvest_save_v1';
+const CROP_KEYS = Object.keys(CROPS);
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
@@ -17,30 +20,59 @@ const hudStamina = document.getElementById('hud-stamina');
 const toolbarEl = document.getElementById('toolbar');
 const toastEl = document.getElementById('toast');
 
-// State Utama Game
-const state = {
-  day: 1,
-  timeMinutes: 360, // 06:00 pagi
-  gold: 500,
-  stamina: 100,
-  maxStamina: 100,
-  waterCan: 20,
-  maxWaterCan: 20,
-  seeds: { turnip: 5 },
-  harvested: { turnip: 0 },
-  shippingValue: 0,
-  selectedTool: 0, // 0: Hoe, 1: Seed, 2: Watering Can, 3: Hands/Harvest
-  map: createInitialMap(),
-  crops: {}, // key: "r,c" -> { type: 'turnip', daysGrown: 0, wateredToday: false }
-  player: {
-    x: 4 * TILE_SIZE,
-    y: 4 * TILE_SIZE,
-    size: 24,
-    speed: 150,
-    dir: 'down', // up, down, left, right
-  },
-};
+function createFreshState() {
+  return {
+    day: 1,
+    timeMinutes: 360, // 06:00
+    gold: 500,
+    stamina: 100,
+    maxStamina: 100,
+    waterCan: 20,
+    maxWaterCan: 20,
+    activeSeed: 'turnip',
+    seeds: { turnip: 5, potato: 2 },
+    harvested: { turnip: 0, potato: 0 },
+    shippingValue: 0,
+    selectedTool: 0, // 0: Hoe, 1: Seed, 2: Watering Can, 3: Hands/Harvest
+    map: createInitialMap(),
+    crops: {},
+    player: {
+      x: 4 * TILE_SIZE,
+      y: 4 * TILE_SIZE,
+      size: 24,
+      speed: 155,
+      dir: 'down',
+    },
+  };
+}
 
+function loadState() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return createFreshState();
+    const parsed = JSON.parse(raw);
+    const fresh = createFreshState();
+    return {
+      ...fresh,
+      ...parsed,
+      seeds: { ...fresh.seeds, ...(parsed.seeds || {}) },
+      harvested: { ...fresh.harvested, ...(parsed.harvested || {}) },
+      player: { ...fresh.player, ...(parsed.player || {}) },
+    };
+  } catch {
+    return createFreshState();
+  }
+}
+
+function saveState() {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+  } catch {
+    // Abaikan jika storage penuh/diblokir
+  }
+}
+
+let state = loadState();
 const keys = {};
 let toastTimer = null;
 
@@ -51,13 +83,20 @@ function showToast(msg) {
   toastTimer = setTimeout(() => toastEl.classList.add('hidden'), 2400);
 }
 
-// Input Keyboard
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   keys[k] = true;
 
   if (['1', '2', '3', '4'].includes(k)) {
     state.selectedTool = Number(k) - 1;
+    renderToolbar();
+  }
+
+  if (k === 'q') {
+    const idx = CROP_KEYS.indexOf(state.activeSeed);
+    state.activeSeed = CROP_KEYS[(idx + 1) % CROP_KEYS.length];
+    const info = CROPS[state.activeSeed];
+    showToast(`Bibit aktif: ${info.name} (Beli ${info.seedCost}G / Jual ${info.sellPrice}G)`);
     renderToolbar();
   }
 
@@ -69,6 +108,13 @@ window.addEventListener('keydown', (e) => {
   if (k === 'b') {
     buySeed();
   }
+
+  if (k === 'l') {
+    localStorage.removeItem(SAVE_KEY);
+    state = createFreshState();
+    showToast('Save dihapus. Game direset ke Day 1.');
+    renderToolbar();
+  }
 });
 
 window.addEventListener('keyup', (e) => {
@@ -76,18 +122,17 @@ window.addEventListener('keyup', (e) => {
 });
 
 function buySeed() {
-  const cost = CROPS.turnip.seedCost;
-  if (state.gold >= cost) {
-    state.gold -= cost;
-    state.seeds.turnip += 1;
-    showToast(`Membeli 1 Bibit Turnip (-${cost} G)`);
+  const cropInfo = CROPS[state.activeSeed];
+  if (state.gold >= cropInfo.seedCost) {
+    state.gold -= cropInfo.seedCost;
+    state.seeds[state.activeSeed] += 1;
+    showToast(`Membeli 1 Bibit ${cropInfo.name} (-${cropInfo.seedCost} G)`);
     renderToolbar();
   } else {
-    showToast('Gold tidak cukup untuk beli bibit!');
+    showToast(`Gold tidak cukup untuk beli ${cropInfo.name} (${cropInfo.seedCost} G)!`);
   }
 }
 
-// Mendapatkan koordinat grid tepat di depan pemain
 function getTargetTile() {
   const centerX = state.player.x + state.player.size / 2;
   const centerY = state.player.y + state.player.size / 2;
@@ -102,7 +147,6 @@ function getTargetTile() {
   return { row, col };
 }
 
-// Eksekusi Alat & Interaksi Objek
 function handleAction() {
   const { row, col } = getTargetTile();
   if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return;
@@ -111,7 +155,6 @@ function handleAction() {
   const key = `${row},${col}`;
   const crop = state.crops[key];
 
-  // 1. Interaksi Objek Khusus
   if (tile === TILE.HOUSE_DOOR) {
     sleepNextDay();
     return;
@@ -125,11 +168,20 @@ function handleAction() {
   }
 
   if (tile === TILE.SHIPPING_BIN) {
-    if (state.harvested.turnip > 0) {
-      const earned = state.harvested.turnip * CROPS.turnip.sellPrice;
-      state.shippingValue += earned;
-      showToast(`Menaruh ${state.harvested.turnip} Turnip (+${earned} G besok pagi)`);
-      state.harvested.turnip = 0;
+    let totalEarned = 0;
+    let totalItems = 0;
+    for (const cropType of CROP_KEYS) {
+      const qty = state.harvested[cropType] || 0;
+      if (qty > 0) {
+        totalEarned += qty * CROPS[cropType].sellPrice;
+        totalItems += qty;
+        state.harvested[cropType] = 0;
+      }
+    }
+
+    if (totalItems > 0) {
+      state.shippingValue += totalEarned;
+      showToast(`Menaruh ${totalItems} hasil panen (+${totalEarned} G besok pagi)`);
       renderToolbar();
     } else {
       showToast('Tidak ada hasil panen untuk dijual.');
@@ -137,42 +189,39 @@ function handleAction() {
     return;
   }
 
-  // 2. Panen jika tanaman sudah matang (berlaku untuk alat apa saja jika pakai tangan/slot 4 atau langsung)
   if (crop && crop.daysGrown >= CROPS[crop.type].daysToGrow) {
+    const cropName = CROPS[crop.type].name;
     delete state.crops[key];
-    state.harvested[crop.type] += 1;
-    showToast('Panen Turnip! Simpan ke Shipping Bin di sebelah rumah.');
+    state.harvested[crop.type] = (state.harvested[crop.type] || 0) + 1;
+    showToast(`Panen ${cropName}! Masukkan ke kotak JUAL.`);
     renderToolbar();
     return;
   }
 
-  // 3. Penggunaan Alat Pertanian
   if (state.selectedTool === 0) {
-    // Cangkul
     if (tile === TILE.FARM_DIRT) {
       if (!consumeStamina(4)) return;
       state.map[row][col] = TILE.TILLED;
     }
   } else if (state.selectedTool === 1) {
-    // Tanam Bibit
     if ((tile === TILE.TILLED || tile === TILE.WATERED) && !crop) {
-      if (state.seeds.turnip > 0) {
-        state.seeds.turnip -= 1;
+      const seedType = state.activeSeed;
+      if (state.seeds[seedType] > 0) {
+        state.seeds[seedType] -= 1;
         state.crops[key] = {
-          type: 'turnip',
+          type: seedType,
           daysGrown: 0,
           wateredToday: tile === TILE.WATERED,
         };
         renderToolbar();
       } else {
-        showToast('Bibit habis! Tekan [B] untuk beli (50G).');
+        showToast(`Bibit ${CROPS[seedType].name} habis! Tekan [B] untuk beli.`);
       }
     }
   } else if (state.selectedTool === 2) {
-    // Siram Air
     if (tile === TILE.TILLED || tile === TILE.WATERED) {
       if (state.waterCan <= 0) {
-        showToast('Air di gembor habis! Isi di sumur (kanan atas).');
+        showToast('Air di gembor habis! Isi di kotak AIR.');
         return;
       }
       if (!consumeStamina(2)) return;
@@ -186,29 +235,25 @@ function handleAction() {
 
 function consumeStamina(amount) {
   if (state.stamina < amount) {
-    showToast('Terlalu lelah! Tidur di pintu rumah untuk pulihkan stamina.');
+    showToast('Terlalu lelah! Tidur di pintu TIDUR untuk pulihkan stamina.');
     return false;
   }
   state.stamina -= amount;
   return true;
 }
 
-// Pergantian Hari saat Tidur
 function sleepNextDay() {
   state.day += 1;
-  state.timeMinutes = 360; // Reset ke 06:00
+  state.timeMinutes = 360;
   state.stamina = state.maxStamina;
 
-  // Cairkan uang dari Shipping Bin
+  let notif = `Selamat pagi! Spring Day ${state.day}`;
   if (state.shippingValue > 0) {
     state.gold += state.shippingValue;
-    showToast(`Hari ${state.day}! Pendapatan panen masuk: +${state.shippingValue} G`);
+    notif = `Hari ${state.day}! Pendapatan panen masuk: +${state.shippingValue} G`;
     state.shippingValue = 0;
-  } else {
-    showToast(`Selamat pagi! Memasuki Spring Day ${state.day}`);
   }
 
-  // Proses pertumbuhan tanaman & keringkan tanah
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const key = `${r},${c}`;
@@ -222,9 +267,12 @@ function sleepNextDay() {
       }
     }
   }
+
+  saveState();
+  showToast(notif);
+  renderToolbar();
 }
 
-// Cek Tabrakan Dinding/Objek Padat
 function isWalkable(nx, ny) {
   const pad = 2;
   const corners = [
@@ -245,9 +293,7 @@ function isWalkable(nx, ny) {
   return true;
 }
 
-// Update Logika Per Frame
 function update(dt) {
-  // Gerak Pemain
   let dx = 0;
   let dy = 0;
   if (keys['w'] || keys['arrowup']) {
@@ -278,17 +324,15 @@ function update(dt) {
   if (isWalkable(nextX, state.player.y)) state.player.x = nextX;
   if (isWalkable(state.player.x, nextY)) state.player.y = nextY;
 
-  // Waktu berjalan (1 detik nyata = 10 menit dalam game)
   state.timeMinutes += dt * 10;
   if (state.timeMinutes >= 1440) {
-    // Pingsan otomatis jam 24:00
     sleepNextDay();
     state.stamina = 60;
+    saveState();
     showToast('Ketiduran larut malam! Stamina hanya pulih sebagian.');
   }
 }
 
-// Render Visual ke Canvas
 function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -298,7 +342,6 @@ function render() {
       const x = c * TILE_SIZE;
       const y = r * TILE_SIZE;
 
-      // Warna Dasar Tile
       if (tile === TILE.GRASS) ctx.fillStyle = '#6a994e';
       else if (tile === TILE.FARM_DIRT) ctx.fillStyle = '#bc8a5f';
       else if (tile === TILE.TILLED) ctx.fillStyle = '#8b5e34';
@@ -313,39 +356,33 @@ function render() {
       ctx.strokeStyle = 'rgba(0,0,0,0.08)';
       ctx.strokeRect(x, y, TILE_SIZE, TILE_SIZE);
 
-      // Label ikon sederhana untuk bangunan
       ctx.fillStyle = '#fff';
       ctx.font = '10px sans-serif';
       if (tile === TILE.HOUSE_DOOR) ctx.fillText('TIDUR', x + 2, y + 20);
       if (tile === TILE.SHIPPING_BIN) ctx.fillText('JUAL', x + 4, y + 20);
       if (tile === TILE.WELL) ctx.fillText('AIR', x + 7, y + 20);
 
-      // Gambar Tanaman
       const crop = state.crops[`${r},${c}`];
       if (crop) {
-        const maxDays = CROPS[crop.type].daysToGrow;
+        const info = CROPS[crop.type];
         if (crop.daysGrown === 0) {
-          // Bibit
           ctx.fillStyle = '#e9c46a';
           ctx.fillRect(x + 12, y + 12, 8, 8);
-        } else if (crop.daysGrown < maxDays) {
-          // Tunas
-          ctx.fillStyle = '#90be6d';
+        } else if (crop.daysGrown < info.daysToGrow) {
+          ctx.fillStyle = info.leafColor;
           ctx.fillRect(x + 8, y + 8, 16, 16);
         } else {
-          // Siap Panen (Turnip Putih-Ungu)
-          ctx.fillStyle = '#f8f9fa';
+          ctx.fillStyle = info.color;
           ctx.beginPath();
           ctx.arc(x + 16, y + 18, 10, 0, Math.PI * 2);
           ctx.fill();
-          ctx.fillStyle = '#43aa8b';
+          ctx.fillStyle = info.leafColor;
           ctx.fillRect(x + 11, y + 4, 10, 7);
         }
       }
     }
   }
 
-  // Highlight kotak target di depan pemain
   const target = getTargetTile();
   if (target.row >= 0 && target.row < ROWS && target.col >= 0 && target.col < COLS) {
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
@@ -354,16 +391,14 @@ function render() {
     ctx.lineWidth = 1;
   }
 
-  // Gambar Karakter Pemain (Topi Biru ala Pete)
   const p = state.player;
-  ctx.fillStyle = '#e63946'; // Baju
+  ctx.fillStyle = '#e63946';
   ctx.fillRect(p.x, p.y + 8, p.size, p.size - 8);
-  ctx.fillStyle = '#ffcdb2'; // Wajah
+  ctx.fillStyle = '#ffcdb2';
   ctx.fillRect(p.x + 4, p.y + 4, p.size - 8, 10);
-  ctx.fillStyle = '#1d3557'; // Topi biru ikonik
+  ctx.fillStyle = '#1d3557';
   ctx.fillRect(p.x + 2, p.y, p.size - 4, 7);
 
-  // Update HUD
   const hours = String(Math.floor(state.timeMinutes / 60)).padStart(2, '0');
   const mins = String(Math.floor(state.timeMinutes % 60)).padStart(2, '0');
   const weekday = DAYS_OF_WEEK[state.day % 7];
@@ -373,11 +408,14 @@ function render() {
 }
 
 function renderToolbar() {
+  const activeCrop = CROPS[state.activeSeed];
+  const totalHarvested = CROP_KEYS.reduce((sum, k) => sum + (state.harvested[k] || 0), 0);
+
   const tools = [
     `[1] Cangkul`,
-    `[2] Bibit (${state.seeds.turnip})`,
+    `[2] ${activeCrop.name} (${state.seeds[state.activeSeed]})`,
     `[3] Gembor (${state.waterCan}/${state.maxWaterCan})`,
-    `[4] Tangan (Panen: ${state.harvested.turnip})`,
+    `[4] Panen (${totalHarvested})`,
   ];
 
   toolbarEl.innerHTML = tools
@@ -388,7 +426,6 @@ function renderToolbar() {
     .join('');
 }
 
-// Main Loop
 let lastTime = performance.now();
 function loop(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.1);
