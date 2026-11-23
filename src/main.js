@@ -23,7 +23,7 @@ const toastEl = document.getElementById('toast');
 function createFreshState() {
   return {
     day: 1,
-    timeMinutes: 360, // 06:00
+    timeMinutes: 3600, // 06:00
     gold: 500,
     stamina: 100,
     maxStamina: 100,
